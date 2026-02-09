@@ -56,9 +56,9 @@ class TradingBot:
         if config.telegram.is_valid():
             self.telegram = TelegramAlerter(
                 bot_token=config.telegram.bot_token,
-                chat_id=config.telegram.chat_id,
+                chat_ids=config.telegram.chat_ids,
             )
-            logger.info("Telegram alerts enabled")
+            logger.info(f"Telegram alerts enabled for {len(config.telegram.chat_ids)} chats")
     
     async def start(self) -> None:
         """Start the trading bot."""

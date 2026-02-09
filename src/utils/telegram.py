@@ -18,11 +18,11 @@ logger = logging.getLogger(__name__)
 class TelegramConfig:
     """Telegram configuration."""
     bot_token: str = ""
-    chat_id: str = ""
+    chat_ids: List[str] = field(default_factory=list)
     enabled: bool = False
     
     def is_valid(self) -> bool:
-        return bool(self.bot_token and self.chat_id)
+        return bool(self.bot_token and self.chat_ids)
 
 
 class TelegramAlerter:
@@ -37,9 +37,9 @@ class TelegramAlerter:
     
     API_URL = "https://api.telegram.org/bot{token}/sendMessage"
     
-    def __init__(self, bot_token: str, chat_id: str):
+    def __init__(self, bot_token: str, chat_ids: List[str]):
         self.bot_token = bot_token
-        self.chat_id = chat_id
+        self.chat_ids = chat_ids
         self._session: Optional[aiohttp.ClientSession] = None
     
     async def _get_session(self) -> aiohttp.ClientSession:
@@ -48,8 +48,8 @@ class TelegramAlerter:
         return self._session
     
     async def send_message(self, text: str, parse_mode: str = "HTML") -> bool:
-        """Send a message to Telegram."""
-        if not self.bot_token or not self.chat_id:
+        """Send a message to all configured Telegram chats."""
+        if not self.bot_token or not self.chat_ids:
             logger.debug("Telegram not configured, skipping alert")
             return False
         
@@ -57,21 +57,30 @@ class TelegramAlerter:
             session = await self._get_session()
             url = self.API_URL.format(token=self.bot_token)
             
-            payload = {
-                "chat_id": self.chat_id,
-                "text": text,
-                "parse_mode": parse_mode,
-                "disable_web_page_preview": True,
-            }
+            success_count = 0
             
-            async with session.post(url, json=payload) as resp:
-                if resp.status == 200:
-                    logger.debug("Telegram alert sent")
-                    return True
-                else:
-                    error = await resp.text()
-                    logger.error(f"Telegram API error: {resp.status} - {error}")
-                    return False
+            for chat_id in self.chat_ids:
+                payload = {
+                    "chat_id": chat_id,
+                    "text": text,
+                    "parse_mode": parse_mode,
+                    "disable_web_page_preview": True,
+                }
+                
+                try:
+                    async with session.post(url, json=payload) as resp:
+                        if resp.status == 200:
+                            success_count += 1
+                        else:
+                            error = await resp.text()
+                            logger.error(f"Telegram API error for chat {chat_id}: {resp.status} - {error}")
+                except Exception as e:
+                    logger.error(f"Failed to send to chat {chat_id}: {e}")
+            
+            if success_count > 0:
+                logger.debug(f"Telegram alert sent to {success_count}/{len(self.chat_ids)} chats")
+                return True
+            return False
                     
         except Exception as e:
             logger.error(f"Failed to send Telegram alert: {e}")

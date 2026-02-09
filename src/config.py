@@ -102,11 +102,11 @@ class LoggingConfig:
 class TelegramConfig:
     """Telegram alert configuration."""
     bot_token: str = ""
-    chat_id: str = ""
+    chat_ids: List[str] = field(default_factory=list)
     enabled: bool = False
     
     def is_valid(self) -> bool:
-        return bool(self.bot_token and self.chat_id and self.enabled)
+        return bool(self.bot_token and self.chat_ids and self.enabled)
 
 
 @dataclass
@@ -211,11 +211,11 @@ class Config:
         if bot_token := os.getenv("TELEGRAM_BOT_TOKEN"):
             self.telegram.bot_token = bot_token
         
-        if chat_id := os.getenv("TELEGRAM_CHAT_ID"):
-            self.telegram.chat_id = chat_id
+        if chat_id_str := os.getenv("TELEGRAM_CHAT_ID"):
+            self.telegram.chat_ids = [cid.strip() for cid in chat_id_str.split(",") if cid.strip()]
         
         # Enable telegram if both are set
-        if self.telegram.bot_token and self.telegram.chat_id:
+        if self.telegram.bot_token and self.telegram.chat_ids:
             self.telegram.enabled = os.getenv("TELEGRAM_ENABLED", "true").lower() == "true"
     
     @classmethod
