@@ -2,25 +2,21 @@
 Symbol Fetcher
 ==============
 
-Fetches all available perpetual futures symbols from Bybit.
+Fetches all available perpetual futures symbols from Mudrex.
 """
 
 import logging
 from typing import List, Optional
-import aiohttp
 
 logger = logging.getLogger(__name__)
 
-# Bybit V5 API endpoint for instruments info
-BYBIT_INSTRUMENTS_URL = "https://api.bybit.com/v5/market/instruments-info"
 
-
-async def fetch_all_symbols(category: str = "linear") -> List[str]:
+def fetch_mudrex_symbols(api_secret: str) -> List[str]:
     """
-    Fetch all available perpetual futures symbols from Bybit.
+    Fetch all available perpetual futures symbols from Mudrex.
     
     Args:
-        category: "linear" for USDT perpetuals, "inverse" for inverse contracts
+        api_secret: Mudrex API secret for authentication
         
     Returns:
         List of symbol names (e.g., ["BTCUSDT", "ETHUSDT", ...])
@@ -28,67 +24,70 @@ async def fetch_all_symbols(category: str = "linear") -> List[str]:
     symbols = []
     
     try:
-        async with aiohttp.ClientSession() as session:
-            params = {
-                "category": category,
-                "limit": 1000,  # Max per request
-            }
-            
-            cursor = None
-            while True:
-                if cursor:
-                    params["cursor"] = cursor
+        from mudrex import MudrexClient
+        client = MudrexClient(api_secret=api_secret)
+        
+        # Get all available assets from Mudrex
+        assets = client.assets.list()
+        
+        if assets and hasattr(assets, '__iter__'):
+            for asset in assets:
+                # Get symbol name - handle both dict and object
+                if isinstance(asset, dict):
+                    symbol = asset.get('symbol') or asset.get('name')
+                else:
+                    symbol = getattr(asset, 'symbol', None) or getattr(asset, 'name', None)
                 
-                async with session.get(BYBIT_INSTRUMENTS_URL, params=params) as resp:
-                    if resp.status != 200:
-                        logger.error(f"Failed to fetch symbols: HTTP {resp.status}")
-                        break
-                    
-                    data = await resp.json()
-                    
-                    if data.get("retCode") != 0:
-                        logger.error(f"Bybit API error: {data.get('retMsg')}")
-                        break
-                    
-                    result = data.get("result", {})
-                    instruments = result.get("list", [])
-                    
-                    for inst in instruments:
-                        # Only include trading instruments (status = "Trading")
-                        if inst.get("status") == "Trading":
-                            symbols.append(inst.get("symbol"))
-                    
-                    # Check for pagination
-                    cursor = result.get("nextPageCursor")
-                    if not cursor:
-                        break
+                if symbol:
+                    # Ensure symbol ends with USDT for perpetuals
+                    if not symbol.endswith('USDT'):
+                        symbol = f"{symbol}USDT"
+                    symbols.append(symbol)
         
-        logger.info(f"Fetched {len(symbols)} {category} perpetual symbols from Bybit")
+        # Deduplicate and sort
+        symbols = sorted(list(set(symbols)))
+        logger.info(f"Fetched {len(symbols)} symbols from Mudrex")
         
+    except ImportError:
+        logger.error("Mudrex SDK not installed")
     except Exception as e:
-        logger.error(f"Error fetching symbols: {e}")
+        logger.error(f"Error fetching Mudrex symbols: {e}")
     
     return symbols
 
 
-def fetch_all_symbols_sync() -> List[str]:
+async def fetch_all_symbols(api_secret: Optional[str] = None) -> List[str]:
+    """
+    Fetch all available symbols.
+    Uses Mudrex if api_secret provided, otherwise falls back to defaults.
+    
+    Args:
+        api_secret: Mudrex API secret (optional)
+        
+    Returns:
+        List of symbol names
+    """
+    if api_secret:
+        symbols = fetch_mudrex_symbols(api_secret)
+        if symbols:
+            return symbols
+    
+    logger.warning("Using fallback symbol list")
+    return FALLBACK_SYMBOLS
+
+
+def fetch_all_symbols_sync(api_secret: Optional[str] = None) -> List[str]:
     """
     Synchronous wrapper to fetch all symbols.
     Used during config loading.
     """
-    import asyncio
+    if api_secret:
+        symbols = fetch_mudrex_symbols(api_secret)
+        if symbols:
+            return symbols
     
-    try:
-        # Check if we're already in an event loop
-        loop = asyncio.get_running_loop()
-        # If we are, we need to use a different approach
-        import concurrent.futures
-        with concurrent.futures.ThreadPoolExecutor() as executor:
-            future = executor.submit(asyncio.run, fetch_all_symbols())
-            return future.result(timeout=30)
-    except RuntimeError:
-        # No running loop, safe to use asyncio.run
-        return asyncio.run(fetch_all_symbols())
+    logger.warning("Using fallback symbol list")
+    return FALLBACK_SYMBOLS
 
 
 # Fallback list of major symbols if API fetch fails
@@ -101,13 +100,13 @@ FALLBACK_SYMBOLS = [
 ]
 
 
-def get_all_symbols() -> List[str]:
+def get_all_symbols(api_secret: Optional[str] = None) -> List[str]:
     """
     Get all available trading symbols.
     Falls back to a hardcoded list if API fetch fails.
     """
     try:
-        symbols = fetch_all_symbols_sync()
+        symbols = fetch_all_symbols_sync(api_secret)
         if symbols:
             return symbols
     except Exception as e:
@@ -115,3 +114,4 @@ def get_all_symbols() -> List[str]:
     
     logger.warning(f"Using fallback list of {len(FALLBACK_SYMBOLS)} symbols")
     return FALLBACK_SYMBOLS
+
