@@ -259,8 +259,9 @@ class Config:
     def validate(self) -> bool:
         """Validate configuration."""
         if not self.mudrex_api_secret and not self.dry_run:
-            logger.error("MUDREX_API_SECRET is required for live trading")
-            return False
+            logger.warning("MUDREX_API_SECRET not found. Switching to DRY-RUN mode for safety.")
+            self.dry_run = True
+            # Proceed with validation as dry run
         
         if not self.symbols:
             logger.error("At least one trading symbol is required")
