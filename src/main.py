@@ -301,7 +301,7 @@ async def main_async(args: argparse.Namespace) -> None:
     # Fetch all symbols if not specified
     if not config.symbols:
         from src.utils.symbols import fetch_all_symbols
-        logger.info("Fetching all available symbols from Mudrex...")
+        logger.info("Fetching all available symbols from Bybit...")
         config.symbols = await fetch_all_symbols(config.mudrex_api_secret)
         logger.info(f"Loaded {len(config.symbols)} symbols")
     
