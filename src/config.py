@@ -3,6 +3,7 @@ Configuration Module
 ====================
 
 Loads and validates configuration from YAML files and environment variables.
+Optimized for Railway deployment with full environment variable support.
 """
 
 import os
@@ -62,11 +63,23 @@ class StrategyConfig:
 
 @dataclass
 class RiskConfig:
-    max_capital_per_trade: float = 2.0
+    # Margin percentage - how much of your balance to use per trade
+    margin_percent: float = 5.0  # 5% of balance as margin
+    
+    # Min/Max leverage for auto-scaling
+    min_leverage: int = 1
+    max_leverage: int = 20
+    default_leverage: int = 5
+    
+    # Minimum order value to meet (will scale leverage to achieve this)
+    min_order_value: float = 8.0
+    
+    # Stop-loss / Take-profit
     stoploss_atr_multiplier: float = 1.5
     takeprofit_ratio: float = 2.0
-    default_leverage: int = 5
-    max_leverage: int = 10
+    
+    # Legacy field (kept for compatibility, now uses margin_percent)
+    max_capital_per_trade: float = 2.0
 
 
 @dataclass
@@ -118,16 +131,68 @@ class Config:
             config = cls._from_dict(yaml_config)
             logger.info(f"Loaded configuration from {config_path}")
         else:
-            logger.warning(f"Config file {config_path} not found, using defaults")
+            logger.warning(f"Config file {config_path} not found, using defaults/env vars")
         
-        # Override with environment variables
-        config.mudrex_api_secret = os.getenv("MUDREX_API_SECRET", "")
-        config.dry_run = os.getenv("DRY_RUN", "false").lower() == "true"
-        
-        if log_level := os.getenv("LOG_LEVEL"):
-            config.logging.level = log_level
+        # Override with environment variables (Railway-friendly)
+        config._load_from_env()
         
         return config
+    
+    def _load_from_env(self) -> None:
+        """Load/override configuration from environment variables."""
+        # Core settings
+        self.mudrex_api_secret = os.getenv("MUDREX_API_SECRET", self.mudrex_api_secret)
+        self.dry_run = os.getenv("DRY_RUN", "false").lower() == "true"
+        
+        # Symbols (comma-separated)
+        if symbols := os.getenv("SYMBOLS"):
+            self.symbols = [s.strip().upper() for s in symbols.split(",")]
+        
+        # Timeframe
+        if timeframe := os.getenv("TIMEFRAME"):
+            self.timeframe = int(timeframe)
+        
+        # Risk settings
+        if margin_pct := os.getenv("MARGIN_PERCENT"):
+            self.risk.margin_percent = float(margin_pct)
+        
+        if min_leverage := os.getenv("MIN_LEVERAGE"):
+            self.risk.min_leverage = int(min_leverage)
+        
+        if max_leverage := os.getenv("MAX_LEVERAGE"):
+            self.risk.max_leverage = int(max_leverage)
+        
+        if default_leverage := os.getenv("DEFAULT_LEVERAGE"):
+            self.risk.default_leverage = int(default_leverage)
+        
+        if min_order := os.getenv("MIN_ORDER_VALUE"):
+            self.risk.min_order_value = float(min_order)
+        
+        if sl_mult := os.getenv("STOPLOSS_ATR_MULTIPLIER"):
+            self.risk.stoploss_atr_multiplier = float(sl_mult)
+        
+        if tp_ratio := os.getenv("TAKEPROFIT_RATIO"):
+            self.risk.takeprofit_ratio = float(tp_ratio)
+        
+        # Strategy settings
+        if confluence := os.getenv("MIN_CONFLUENCE_SCORE"):
+            self.strategy.min_confluence_score = int(confluence)
+        
+        if indicators := os.getenv("MIN_INDICATORS_ALIGNED"):
+            self.strategy.min_indicators_aligned = int(indicators)
+        
+        if cooldown := os.getenv("TRADE_COOLDOWN"):
+            self.strategy.trade_cooldown = int(cooldown)
+        
+        if max_pos := os.getenv("MAX_POSITIONS_PER_SYMBOL"):
+            self.strategy.max_positions_per_symbol = int(max_pos)
+        
+        # Logging
+        if log_level := os.getenv("LOG_LEVEL"):
+            self.logging.level = log_level
+        
+        if log_file := os.getenv("LOG_FILE"):
+            self.logging.file = log_file
     
     @classmethod
     def _from_dict(cls, data: dict) -> "Config":
@@ -177,7 +242,25 @@ class Config:
             logger.error("At least one trading symbol is required")
             return False
         
-        if self.risk.max_capital_per_trade > 10:
-            logger.warning("Risk per trade >10% is very aggressive!")
+        if self.risk.margin_percent > 20:
+            logger.warning("Margin percent > 20% is very aggressive!")
+        
+        if self.risk.min_leverage > self.risk.max_leverage:
+            logger.error("MIN_LEVERAGE cannot be greater than MAX_LEVERAGE")
+            return False
         
         return True
+    
+    def print_config(self) -> None:
+        """Print current configuration (for debugging)."""
+        logger.info("=" * 50)
+        logger.info("CONFIGURATION")
+        logger.info("=" * 50)
+        logger.info(f"Mode: {'DRY-RUN' if self.dry_run else 'LIVE'}")
+        logger.info(f"Symbols: {', '.join(self.symbols)}")
+        logger.info(f"Timeframe: {self.timeframe}m")
+        logger.info(f"Margin %: {self.risk.margin_percent}%")
+        logger.info(f"Leverage: {self.risk.min_leverage}-{self.risk.max_leverage}x (default: {self.risk.default_leverage}x)")
+        logger.info(f"Min Order Value: ${self.risk.min_order_value}")
+        logger.info(f"Confluence: {self.strategy.min_confluence_score}% / {self.strategy.min_indicators_aligned} indicators")
+        logger.info("=" * 50)

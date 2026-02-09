@@ -3,10 +3,12 @@ Trade Executor
 ==============
 
 Handles order execution via Mudrex API with rate limiting and error handling.
+Includes auto-leverage scaling to meet minimum order value.
 """
 
 import logging
-from typing import Optional
+import math
+from typing import Optional, Tuple
 from dataclasses import dataclass
 
 from src.config import Config
@@ -23,6 +25,9 @@ class TradeResult:
     symbol: str = ""
     side: str = ""
     quantity: str = ""
+    leverage: int = 1
+    margin_used: float = 0.0
+    position_value: float = 0.0
     entry_price: Optional[float] = None
     stoploss_price: Optional[float] = None
     takeprofit_price: Optional[float] = None
@@ -36,8 +41,8 @@ class TradeExecutor:
     Features:
     - Dry-run mode for testing
     - Rate limit awareness
-    - Error handling with retries
-    - Position size calculation
+    - Auto-leverage scaling to meet min order value
+    - Margin percentage based position sizing
     
     Example:
         executor = TradeExecutor(config)
@@ -46,11 +51,10 @@ class TradeExecutor:
             print(f"Order placed: {result.order_id}")
     """
     
-    MIN_ORDER_VALUE = 7.0  # Minimum order value in USD
-    
     def __init__(self, config: Config):
         self.config = config
         self._client = None
+        self._balance_cache: Optional[float] = None
         
         if not config.dry_run:
             self._init_client()
@@ -91,13 +95,92 @@ class TradeExecutor:
         # Live execution
         return self._live_execute(signal)
     
+    def _calculate_position(self, signal: Signal, balance: float) -> Tuple[str, int, float, float]:
+        """
+        Calculate position size with auto-leverage scaling.
+        
+        Returns:
+            Tuple of (quantity, leverage, margin_used, position_value)
+        """
+        risk_cfg = self.config.risk
+        
+        # Calculate margin amount (% of balance)
+        margin_amount = balance * (risk_cfg.margin_percent / 100)
+        
+        # Start with default leverage
+        leverage = risk_cfg.default_leverage
+        
+        # Calculate position value
+        position_value = margin_amount * leverage
+        
+        # Check if we meet minimum order value
+        min_order = risk_cfg.min_order_value
+        
+        if position_value < min_order:
+            # Scale up leverage to meet minimum
+            required_leverage = math.ceil(min_order / margin_amount)
+            
+            if required_leverage <= risk_cfg.max_leverage:
+                leverage = required_leverage
+                position_value = margin_amount * leverage
+                logger.info(
+                    f"Auto-scaled leverage to {leverage}x to meet min order ${min_order}"
+                )
+            else:
+                # Cannot meet minimum even with max leverage
+                leverage = risk_cfg.max_leverage
+                position_value = margin_amount * leverage
+                logger.warning(
+                    f"Cannot meet min order ${min_order} even with max leverage "
+                    f"{risk_cfg.max_leverage}x. Position value: ${position_value:.2f}"
+                )
+        
+        # Calculate quantity
+        quantity = position_value / signal.entry_price
+        
+        return quantity, leverage, margin_amount, position_value
+    
+    def _format_quantity(self, quantity: float, symbol: str) -> str:
+        """Format quantity with appropriate precision."""
+        if self._client:
+            try:
+                asset = self._client.assets.get(symbol)
+                min_qty = float(asset.min_quantity)
+                qty_step = float(asset.quantity_step)
+                
+                # Round to quantity step
+                quantity = max(min_qty, round(quantity / qty_step) * qty_step)
+                
+                # Format with appropriate precision
+                precision = len(str(qty_step).split('.')[-1]) if '.' in str(qty_step) else 0
+                return str(round(quantity, precision))
+            except Exception as e:
+                logger.warning(f"Could not get asset info: {e}")
+        
+        # Fallback formatting
+        if "BTC" in symbol:
+            return f"{quantity:.5f}"
+        elif "ETH" in symbol:
+            return f"{quantity:.4f}"
+        else:
+            return f"{quantity:.2f}"
+    
     def _dry_run_execute(self, signal: Signal) -> TradeResult:
         """Simulate trade execution without placing real orders."""
-        quantity = self._calculate_quantity(signal)
+        # Use simulated balance
+        balance = 1000.0
+        
+        quantity, leverage, margin_used, position_value = self._calculate_position(
+            signal, balance
+        )
+        
+        quantity_str = self._format_quantity(quantity, signal.symbol)
         
         logger.info(
-            f"[DRY-RUN] Would execute {signal.side} {quantity} {signal.symbol} @ "
-            f"{signal.entry_price:.4f} | SL: {signal.stoploss_price:.4f} | "
+            f"[DRY-RUN] {signal.side} {quantity_str} {signal.symbol} | "
+            f"Leverage: {leverage}x | Margin: ${margin_used:.2f} | "
+            f"Position: ${position_value:.2f} | "
+            f"Entry: {signal.entry_price:.4f} | SL: {signal.stoploss_price:.4f} | "
             f"TP: {signal.takeprofit_price:.4f}"
         )
         
@@ -106,7 +189,10 @@ class TradeExecutor:
             order_id="DRY_RUN_" + signal.symbol,
             symbol=signal.symbol,
             side=signal.side,
-            quantity=quantity,
+            quantity=quantity_str,
+            leverage=leverage,
+            margin_used=margin_used,
+            position_value=position_value,
             entry_price=signal.entry_price,
             stoploss_price=signal.stoploss_price,
             takeprofit_price=signal.takeprofit_price,
@@ -121,20 +207,34 @@ class TradeExecutor:
             )
         
         try:
-            quantity = self._calculate_quantity(signal)
-            
-            # Validate minimum order value
-            order_value = float(quantity) * signal.entry_price
-            if order_value < self.MIN_ORDER_VALUE:
+            # Get current balance
+            balance = self.get_balance()
+            if balance is None or balance <= 0:
                 return TradeResult(
                     success=False,
-                    error=f"Order value ${order_value:.2f} below minimum ${self.MIN_ORDER_VALUE}"
+                    error="Could not get balance or balance is zero"
                 )
+            
+            # Calculate position with auto-leverage
+            quantity, leverage, margin_used, position_value = self._calculate_position(
+                signal, balance
+            )
+            
+            # Final validation
+            min_order = self.config.risk.min_order_value
+            if position_value < min_order:
+                return TradeResult(
+                    success=False,
+                    error=f"Position value ${position_value:.2f} below minimum ${min_order}"
+                )
+            
+            # Format quantity
+            quantity_str = self._format_quantity(quantity, signal.symbol)
             
             # Set leverage
             self._client.leverage.set(
                 symbol=signal.symbol,
-                leverage=str(signal.leverage),
+                leverage=str(leverage),
                 margin_type="ISOLATED"
             )
             
@@ -142,15 +242,16 @@ class TradeExecutor:
             order = self._client.orders.create_market_order(
                 symbol=signal.symbol,
                 side=signal.side,
-                quantity=quantity,
-                leverage=str(signal.leverage),
+                quantity=quantity_str,
+                leverage=str(leverage),
                 stoploss_price=str(round(signal.stoploss_price, 4)) if signal.stoploss_price else None,
                 takeprofit_price=str(round(signal.takeprofit_price, 4)) if signal.takeprofit_price else None,
             )
             
             logger.info(
-                f"Order executed: {signal.side} {quantity} {signal.symbol} @ "
-                f"market | Order ID: {order.order_id}"
+                f"✅ Order executed: {signal.side} {quantity_str} {signal.symbol} | "
+                f"Leverage: {leverage}x | Margin: ${margin_used:.2f} | "
+                f"Position: ${position_value:.2f} | Order ID: {order.order_id}"
             )
             
             return TradeResult(
@@ -158,7 +259,10 @@ class TradeExecutor:
                 order_id=order.order_id,
                 symbol=signal.symbol,
                 side=signal.side,
-                quantity=quantity,
+                quantity=quantity_str,
+                leverage=leverage,
+                margin_used=margin_used,
+                position_value=position_value,
                 entry_price=signal.entry_price,
                 stoploss_price=signal.stoploss_price,
                 takeprofit_price=signal.takeprofit_price,
@@ -173,46 +277,6 @@ class TradeExecutor:
                 error=str(e)
             )
     
-    def _calculate_quantity(self, signal: Signal) -> str:
-        """Calculate position quantity based on risk and capital."""
-        if self.config.dry_run:
-            # Use fixed quantity for dry-run
-            if "BTC" in signal.symbol:
-                return "0.001"
-            elif "ETH" in signal.symbol:
-                return "0.01"
-            else:
-                return "10"
-        
-        try:
-            # Get futures balance
-            balance = self._client.wallet.get_futures_balance()
-            available = float(balance.balance)
-            
-            # Calculate position value (risk % of capital * leverage)
-            risk_pct = signal.position_size_pct / 100
-            position_value = available * risk_pct * signal.leverage
-            
-            # Calculate quantity
-            quantity = position_value / signal.entry_price
-            
-            # Get asset info for min_quantity and quantity_step
-            asset = self._client.assets.get(signal.symbol)
-            min_qty = float(asset.min_quantity)
-            qty_step = float(asset.quantity_step)
-            
-            # Round to quantity step
-            quantity = max(min_qty, round(quantity / qty_step) * qty_step)
-            
-            # Format with appropriate precision
-            precision = len(str(qty_step).split('.')[-1]) if '.' in str(qty_step) else 0
-            return str(round(quantity, precision))
-            
-        except Exception as e:
-            logger.error(f"Failed to calculate quantity: {e}")
-            # Fallback to minimum
-            return "0.001" if "BTC" in signal.symbol else "1"
-    
     def get_balance(self) -> Optional[float]:
         """Get current futures balance."""
         if self.config.dry_run:
@@ -220,10 +284,11 @@ class TradeExecutor:
         
         try:
             balance = self._client.wallet.get_futures_balance()
-            return float(balance.balance)
+            self._balance_cache = float(balance.balance)
+            return self._balance_cache
         except Exception as e:
             logger.error(f"Failed to get balance: {e}")
-            return None
+            return self._balance_cache  # Return cached if available
     
     def close(self) -> None:
         """Close the Mudrex client connection."""

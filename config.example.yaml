@@ -1,71 +1,86 @@
-# Free Weight Strategy Configuration
-
-# Trading pairs to monitor and trade
+# ================================
+# Symbols and Timeframe
+# ================================
 symbols:
   - BTCUSDT
   - ETHUSDT
-  - SOLUSDT
 
-# Timeframe for kline data (in minutes)
-timeframe: 5
+timeframe: 5  # in minutes
 
-# Technical Indicator Settings
+# ================================
+# Technical Indicators
+# ================================
 indicators:
   ema:
     fast_period: 9
     slow_period: 21
+  
   rsi:
     period: 14
     oversold: 30
     overbought: 70
+  
   macd:
     fast_period: 12
     slow_period: 26
     signal_period: 9
+  
   atr:
     period: 14
 
+# ================================
 # Strategy Settings
+# ================================
 strategy:
-  # Minimum confluence score (0-100) to enter a trade
+  # Minimum confluence score to trigger trade (0-100)
   min_confluence_score: 60
-  # Minimum number of aligned indicators (out of 5)
+  
+  # Minimum indicators aligned (out of 5)
   min_indicators_aligned: 3
+  
   # Cooldown between trades (seconds)
   trade_cooldown: 300
-  # Maximum open positions per symbol
+  
+  # Maximum positions per symbol
   max_positions_per_symbol: 1
 
+# ================================
 # Risk Management
+# ================================
 risk:
-  # Maximum capital per trade (percentage)
-  max_capital_per_trade: 2.0
-  # Stop-loss multiplier (based on ATR)
+  # Margin percentage - % of balance to use as margin per trade
+  # Example: 5% margin on $100 balance = $5 margin
+  margin_percent: 5.0
+  
+  # Leverage settings
+  min_leverage: 1      # Minimum leverage allowed
+  max_leverage: 20     # Maximum leverage (for auto-scaling)
+  default_leverage: 5  # Default leverage if no scaling needed
+  
+  # Minimum order value in USD
+  # Leverage will auto-scale up to meet this minimum
+  min_order_value: 8.0
+  
+  # Stop-loss: distance = ATR * multiplier
   stoploss_atr_multiplier: 1.5
-  # Take-profit risk:reward ratio
+  
+  # Take-profit: distance = SL distance * ratio
   takeprofit_ratio: 2.0
-  # Default leverage
-  default_leverage: 5
-  # Maximum leverage allowed
-  max_leverage: 10
 
+# ================================
 # Bybit WebSocket Settings
+# ================================
 bybit:
-  # WebSocket URL for linear perpetuals
-  ws_url: wss://stream.bybit.com/v5/public/linear
-  # REST API URL for historical data
-  rest_url: https://api.bybit.com
-  # Ping interval (seconds)
+  ws_url: "wss://stream.bybit.com/v5/public/linear"
+  rest_url: "https://api.bybit.com"
   ping_interval: 20
-  # Reconnect delay (seconds)
   reconnect_delay: 5
 
+# ================================
 # Logging
+# ================================
 logging:
   level: INFO
-  # Log file path (leave empty for console only)
-  file: logs/strategy.log
-  # Maximum log file size (MB)
-  max_size: 10
-  # Number of backup files to keep
+  # file: logs/trading.log  # Uncomment to enable file logging
+  max_size: 10  # MB
   backup_count: 5

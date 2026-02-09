@@ -57,6 +57,9 @@ class TradingBot:
         logger.info(f"Mode: {'DRY-RUN' if self.config.dry_run else 'LIVE TRADING'}")
         logger.info(f"Symbols: {', '.join(self.config.symbols)}")
         logger.info(f"Timeframe: {self.config.timeframe}m")
+        logger.info(f"Margin %: {self.config.risk.margin_percent}%")
+        logger.info(f"Leverage: {self.config.risk.min_leverage}-{self.config.risk.max_leverage}x")
+        logger.info(f"Min Order Value: ${self.config.risk.min_order_value}")
         logger.info(f"Min confluence: {self.config.strategy.min_confluence_score}%")
         logger.info(f"Min indicators: {self.config.strategy.min_indicators_aligned}/5")
         logger.info("=" * 60)
@@ -66,6 +69,8 @@ class TradingBot:
             balance = self.executor.get_balance()
             if balance:
                 logger.info(f"Futures Balance: ${balance:.2f}")
+                margin_per_trade = balance * (self.config.risk.margin_percent / 100)
+                logger.info(f"Margin per trade: ${margin_per_trade:.2f}")
             
             # Sync existing positions
             if self.executor._client:
@@ -165,6 +170,7 @@ class TradingBot:
         if result.success:
             logger.info(
                 f"✅ Trade executed: {result.side} {result.quantity} {result.symbol} | "
+                f"Leverage: {result.leverage}x | Margin: ${result.margin_used:.2f} | "
                 f"Order ID: {result.order_id}"
             )
             
@@ -178,7 +184,7 @@ class TradingBot:
                     entry_price=result.entry_price,
                     stoploss_price=result.stoploss_price,
                     takeprofit_price=result.takeprofit_price,
-                    leverage=signal.leverage,
+                    leverage=result.leverage,
                 )
         else:
             logger.error(f"❌ Trade failed: {result.error}")
