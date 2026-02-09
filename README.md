@@ -6,6 +6,68 @@ An advanced multi-indicator confluence trading strategy for crypto perpetual fut
 
 ## Architecture
 
+### System Flow
+
+```mermaid
+flowchart TB
+    subgraph DataSource["📡 Data Source"]
+        WS["Bybit WebSocket<br/>V5 Linear Stream"]
+    end
+    
+    subgraph DataLayer["📊 Data Layer"]
+        KH["Kline Handler<br/>OHLCV Storage"]
+        TH["Ticker Handler<br/>OI & Funding History"]
+    end
+    
+    subgraph Indicators["📈 Technical Indicators"]
+        EMA["EMA<br/>9/21 Crossover"]
+        RSI["RSI<br/>Overbought/Oversold"]
+        MACD["MACD<br/>Signal Crossover"]
+        ATR["ATR<br/>Volatility"]
+    end
+    
+    subgraph MarketData["🔍 Market Analysis"]
+        OI["Open Interest<br/>Z-Score & Confirmation"]
+        FR["Funding Rate<br/>Squeeze Detection"]
+    end
+    
+    subgraph Strategy["🧠 Strategy Engine"]
+        CONF["Confluence Scoring<br/>5 Indicators × 20% each"]
+        SIG["Signal Generation<br/>LONG / SHORT / NEUTRAL"]
+    end
+    
+    subgraph Execution["⚡ Execution Layer"]
+        EXEC["Trade Executor<br/>Mudrex SDK"]
+        PM["Position Manager<br/>Risk Controls"]
+    end
+    
+    subgraph Exchange["🏦 Exchange"]
+        MX["Mudrex API<br/>Order Execution"]
+    end
+    
+    WS --> KH
+    WS --> TH
+    KH --> EMA
+    KH --> RSI
+    KH --> MACD
+    KH --> ATR
+    TH --> OI
+    TH --> FR
+    EMA --> CONF
+    RSI --> CONF
+    MACD --> CONF
+    OI --> CONF
+    FR --> CONF
+    ATR --> SIG
+    CONF --> SIG
+    SIG --> EXEC
+    EXEC --> PM
+    EXEC --> MX
+    PM --> MX
+```
+
+### Detailed Architecture
+
 ```
 ┌─────────────────────────────────────────────────────────────────────────────┐
 │                           FREE WEIGHT STRATEGY                              │
