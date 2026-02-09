@@ -117,12 +117,8 @@ class Config:
     mudrex_api_secret: str = ""
     
     # Trading settings
-    symbols: List[str] = field(default_factory=lambda: [
-        "BTCUSDT", "ETHUSDT", "SOLUSDT", "XRPUSDT", "DOGEUSDT",
-        "ADAUSDT", "AVAXUSDT", "LINKUSDT", "DOTUSDT", "MATICUSDT",
-        "LTCUSDT", "UNIUSDT", "ATOMUSDT", "XLMUSDT", "ETCUSDT",
-        "FILUSDT", "APTUSDT", "NEARUSDT", "ARBUSDT", "OPUSDT",
-    ])
+    # Empty list = fetch ALL available symbols from Bybit at startup
+    symbols: List[str] = field(default_factory=list)
     timeframe: int = 5
     
     # Sub-configs

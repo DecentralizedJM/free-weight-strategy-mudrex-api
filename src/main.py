@@ -67,7 +67,7 @@ class TradingBot:
         logger.info("=" * 60)
         mode = 'DRY-RUN' if self.config.dry_run else 'LIVE TRADING'
         logger.info(f"Mode: {mode}")
-        logger.info(f"Symbols: {', '.join(self.config.symbols)}")
+        logger.info(f"Symbols: {len(self.config.symbols)} pairs")
         logger.info(f"Timeframe: {self.config.timeframe}m")
         logger.info(f"Margin %: {self.config.risk.margin_percent}%")
         leverage_range = f"{self.config.risk.min_leverage}-{self.config.risk.max_leverage}x"
@@ -297,6 +297,13 @@ async def main_async(args: argparse.Namespace) -> None:
         max_size_mb=config.logging.max_size,
         backup_count=config.logging.backup_count,
     )
+    
+    # Fetch all symbols if not specified
+    if not config.symbols:
+        from src.utils.symbols import fetch_all_symbols
+        logger.info("Fetching all available symbols from Bybit...")
+        config.symbols = await fetch_all_symbols()
+        logger.info(f"Loaded {len(config.symbols)} symbols")
     
     # Validate configuration
     if not config.validate():
