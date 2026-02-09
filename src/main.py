@@ -19,6 +19,7 @@ from typing import Optional
 
 from src.config import Config
 from src.utils.logger import setup_logging
+from src.utils.telegram import TelegramAlerter
 from src.bybit_ws.client import BybitWebSocket, OHLCV, Ticker
 from src.strategy.engine import StrategyEngine
 from src.trading.executor import TradeExecutor
@@ -36,7 +37,8 @@ class TradingBot:
     2. Update indicators on each new candle
     3. Evaluate strategy on candle close
     4. Execute trades via Mudrex API
-    5. Monitor positions
+    5. Send Telegram alerts
+    6. Monitor positions
     """
     
     def __init__(self, config: Config):
@@ -48,22 +50,35 @@ class TradingBot:
         self.engine = StrategyEngine(config)
         self.executor = TradeExecutor(config)
         self.position_manager = PositionManager(config)
+        
+        # Initialize Telegram alerter
+        self.telegram: Optional[TelegramAlerter] = None
+        if config.telegram.is_valid():
+            self.telegram = TelegramAlerter(
+                bot_token=config.telegram.bot_token,
+                chat_id=config.telegram.chat_id,
+            )
+            logger.info("Telegram alerts enabled")
     
     async def start(self) -> None:
         """Start the trading bot."""
         logger.info("=" * 60)
         logger.info("Free Weight Strategy - Starting")
         logger.info("=" * 60)
-        logger.info(f"Mode: {'DRY-RUN' if self.config.dry_run else 'LIVE TRADING'}")
+        mode = 'DRY-RUN' if self.config.dry_run else 'LIVE TRADING'
+        logger.info(f"Mode: {mode}")
         logger.info(f"Symbols: {', '.join(self.config.symbols)}")
         logger.info(f"Timeframe: {self.config.timeframe}m")
         logger.info(f"Margin %: {self.config.risk.margin_percent}%")
-        logger.info(f"Leverage: {self.config.risk.min_leverage}-{self.config.risk.max_leverage}x")
+        leverage_range = f"{self.config.risk.min_leverage}-{self.config.risk.max_leverage}x"
+        logger.info(f"Leverage: {leverage_range}")
         logger.info(f"Min Order Value: ${self.config.risk.min_order_value}")
         logger.info(f"Min confluence: {self.config.strategy.min_confluence_score}%")
         logger.info(f"Min indicators: {self.config.strategy.min_indicators_aligned}/5")
+        logger.info(f"Telegram: {'Enabled ✅' if self.telegram else 'Disabled'}")
         logger.info("=" * 60)
         
+        balance = None
         if not self.config.dry_run:
             # Show initial balance
             balance = self.executor.get_balance()
@@ -78,6 +93,16 @@ class TradingBot:
                 positions = self.position_manager.get_all_positions()
                 if positions:
                     logger.info(f"Existing positions: {len(positions)}")
+        
+        # Send startup alert
+        if self.telegram:
+            await self.telegram.send_startup(
+                mode=mode,
+                symbols=self.config.symbols,
+                margin_pct=self.config.risk.margin_percent,
+                leverage_range=leverage_range,
+                balance=balance,
+            )
         
         # Initialize WebSocket
         self.ws = BybitWebSocket(
@@ -111,6 +136,11 @@ class TradingBot:
         if self.ws:
             await self.ws.close()
         
+        # Send shutdown alert
+        if self.telegram:
+            await self.telegram.send_shutdown()
+            await self.telegram.close()
+        
         self.executor.close()
         logger.info("Trading bot stopped")
     
@@ -129,14 +159,15 @@ class TradingBot:
         
         # Only evaluate on confirmed (closed) candles
         if kline.confirm:
-            self._evaluate_signal(symbol)
+            # Use asyncio to run async signal evaluation
+            asyncio.create_task(self._evaluate_signal_async(symbol))
     
     def _on_ticker(self, ticker: Ticker) -> None:
         """Handle ticker updates."""
         self.engine.update_ticker(ticker)
     
-    def _evaluate_signal(self, symbol: str) -> None:
-        """Evaluate strategy and potentially execute trade."""
+    async def _evaluate_signal_async(self, symbol: str) -> None:
+        """Evaluate strategy and potentially execute trade (async for Telegram)."""
         # Check if can open new position
         if not self.position_manager.can_open_position(symbol):
             logger.debug(f"{symbol}: Max positions reached, skipping evaluation")
@@ -160,6 +191,17 @@ class TradingBot:
         # Log signal
         logger.info(f"SIGNAL: {signal}")
         
+        # Send Telegram signal alert
+        if self.telegram:
+            await self.telegram.send_signal(
+                symbol=signal.symbol,
+                side=signal.side,
+                confluence_score=signal.confluence_score,
+                entry_price=signal.entry_price,
+                stoploss_price=signal.stoploss_price,
+                takeprofit_price=signal.takeprofit_price,
+            )
+        
         # Log indicator values for debugging
         indicator_values = self.engine.get_indicator_values(symbol)
         logger.debug(f"Indicators: {indicator_values}")
@@ -173,6 +215,21 @@ class TradingBot:
                 f"Leverage: {result.leverage}x | Margin: ${result.margin_used:.2f} | "
                 f"Order ID: {result.order_id}"
             )
+            
+            # Send Telegram trade alert
+            if self.telegram:
+                await self.telegram.send_trade_executed(
+                    symbol=result.symbol,
+                    side=result.side,
+                    quantity=result.quantity,
+                    leverage=result.leverage,
+                    margin_used=result.margin_used,
+                    position_value=result.position_value,
+                    entry_price=result.entry_price,
+                    stoploss_price=result.stoploss_price,
+                    takeprofit_price=result.takeprofit_price,
+                    order_id=result.order_id,
+                )
             
             # Track position (for dry-run, use fake ID)
             if self.config.dry_run:
@@ -188,6 +245,14 @@ class TradingBot:
                 )
         else:
             logger.error(f"❌ Trade failed: {result.error}")
+            
+            # Send Telegram failure alert
+            if self.telegram:
+                await self.telegram.send_trade_failed(
+                    symbol=signal.symbol,
+                    side=signal.side,
+                    error=result.error or "Unknown error",
+                )
 
 
 def parse_args() -> argparse.Namespace:

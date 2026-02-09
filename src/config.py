@@ -99,6 +99,17 @@ class LoggingConfig:
 
 
 @dataclass
+class TelegramConfig:
+    """Telegram alert configuration."""
+    bot_token: str = ""
+    chat_id: str = ""
+    enabled: bool = False
+    
+    def is_valid(self) -> bool:
+        return bool(self.bot_token and self.chat_id and self.enabled)
+
+
+@dataclass
 class Config:
     """Main configuration container."""
     
@@ -115,6 +126,7 @@ class Config:
     risk: RiskConfig = field(default_factory=RiskConfig)
     bybit: BybitConfig = field(default_factory=BybitConfig)
     logging: LoggingConfig = field(default_factory=LoggingConfig)
+    telegram: TelegramConfig = field(default_factory=TelegramConfig)
     
     # Runtime flags
     dry_run: bool = False
@@ -193,6 +205,17 @@ class Config:
         
         if log_file := os.getenv("LOG_FILE"):
             self.logging.file = log_file
+        
+        # Telegram
+        if bot_token := os.getenv("TELEGRAM_BOT_TOKEN"):
+            self.telegram.bot_token = bot_token
+        
+        if chat_id := os.getenv("TELEGRAM_CHAT_ID"):
+            self.telegram.chat_id = chat_id
+        
+        # Enable telegram if both are set
+        if self.telegram.bot_token and self.telegram.chat_id:
+            self.telegram.enabled = os.getenv("TELEGRAM_ENABLED", "true").lower() == "true"
     
     @classmethod
     def _from_dict(cls, data: dict) -> "Config":
