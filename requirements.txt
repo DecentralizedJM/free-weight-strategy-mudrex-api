@@ -1,0 +1,19 @@
+# Core dependencies
+git+https://github.com/DecentralizedJM/mudrex-api-trading-python-sdk.git
+websockets>=12.0
+aiohttp>=3.9.0
+
+# Data processing
+pandas>=2.0.0
+numpy>=1.24.0
+
+# Configuration
+pyyaml>=6.0
+python-dotenv>=1.0.0
+
+# Utilities
+asyncio-throttle>=1.0.2
+
+# Testing
+pytest>=7.0.0
+pytest-asyncio>=0.21.0
