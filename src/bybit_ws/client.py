@@ -19,6 +19,26 @@ from websockets.exceptions import ConnectionClosed
 logger = logging.getLogger(__name__)
 
 
+def safe_float(value: Any, default: float = 0.0) -> float:
+    """Safely convert value to float, returning default for empty/invalid values."""
+    if value is None or value == "":
+        return default
+    try:
+        return float(value)
+    except (ValueError, TypeError):
+        return default
+
+
+def safe_int(value: Any, default: int = 0) -> int:
+    """Safely convert value to int, returning default for empty/invalid values."""
+    if value is None or value == "":
+        return default
+    try:
+        return int(value)
+    except (ValueError, TypeError):
+        return default
+
+
 @dataclass
 class OHLCV:
     """OHLCV candle data."""
@@ -174,13 +194,13 @@ class BybitWebSocket:
         
         for candle in data:
             ohlcv = OHLCV(
-                timestamp=int(candle.get("start", 0)),
-                open=float(candle.get("open", 0)),
-                high=float(candle.get("high", 0)),
-                low=float(candle.get("low", 0)),
-                close=float(candle.get("close", 0)),
-                volume=float(candle.get("volume", 0)),
-                turnover=float(candle.get("turnover", 0)),
+                timestamp=safe_int(candle.get("start"), 0),
+                open=safe_float(candle.get("open"), 0),
+                high=safe_float(candle.get("high"), 0),
+                low=safe_float(candle.get("low"), 0),
+                close=safe_float(candle.get("close"), 0),
+                volume=safe_float(candle.get("volume"), 0),
+                turnover=safe_float(candle.get("turnover"), 0),
                 confirm=candle.get("confirm", False),
             )
             
@@ -218,16 +238,16 @@ class BybitWebSocket:
         
         ticker = Ticker(
             symbol=symbol,
-            last_price=float(ticker_data.get("lastPrice", 0)),
-            mark_price=float(ticker_data.get("markPrice", 0)),
-            index_price=float(ticker_data.get("indexPrice", 0)),
-            funding_rate=float(ticker_data.get("fundingRate", 0)),
-            next_funding_time=int(ticker_data.get("nextFundingTime", 0)),
-            open_interest=float(ticker_data.get("openInterest", 0)),
-            volume_24h=float(ticker_data.get("volume24h", 0)),
-            turnover_24h=float(ticker_data.get("turnover24h", 0)),
-            high_24h=float(ticker_data.get("highPrice24h", 0)),
-            low_24h=float(ticker_data.get("lowPrice24h", 0)),
+            last_price=safe_float(ticker_data.get("lastPrice"), 0),
+            mark_price=safe_float(ticker_data.get("markPrice"), 0),
+            index_price=safe_float(ticker_data.get("indexPrice"), 0),
+            funding_rate=safe_float(ticker_data.get("fundingRate"), 0),
+            next_funding_time=safe_int(ticker_data.get("nextFundingTime"), 0),
+            open_interest=safe_float(ticker_data.get("openInterest"), 0),
+            volume_24h=safe_float(ticker_data.get("volume24h"), 0),
+            turnover_24h=safe_float(ticker_data.get("turnover24h"), 0),
+            high_24h=safe_float(ticker_data.get("highPrice24h"), 0),
+            low_24h=safe_float(ticker_data.get("lowPrice24h"), 0),
         )
         
         self.tickers[symbol] = ticker
