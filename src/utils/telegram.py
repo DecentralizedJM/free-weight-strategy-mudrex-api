@@ -7,8 +7,8 @@ Sends trade signals and execution alerts to Telegram.
 
 import logging
 import asyncio
-from typing import Optional
-from dataclasses import dataclass
+from typing import Optional, List
+from dataclasses import dataclass, field
 import aiohttp
 
 logger = logging.getLogger(__name__)
