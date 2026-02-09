@@ -172,13 +172,14 @@ class TelegramAlerter:
         balance: Optional[float] = None,
     ) -> bool:
         """Send bot startup notification."""
-        symbols_str = ", ".join(symbols)
+        # Show count instead of listing all symbols to avoid message length limit
+        symbols_count = len(symbols)
         
         text = f"""
 🚀 <b>Free Weight Strategy Started</b>
 
 🔧 <b>Mode:</b> {mode}
-📊 <b>Symbols:</b> {symbols_str}
+📊 <b>Symbols:</b> {symbols_count} pairs
 💰 <b>Margin:</b> {margin_pct}%
 ⚡ <b>Leverage:</b> {leverage_range}
 {f"💵 <b>Balance:</b> ${balance:.2f}" if balance else ""}
