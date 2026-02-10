@@ -244,7 +244,7 @@ class TradingBot:
                     leverage=result.leverage,
                 )
         else:
-            logger.error(f"❌ Trade failed: {result.error}")
+            logger.warning(f"⚠️ Trade skipped: {result.error}")
             
             # Send Telegram failure alert
             if self.telegram:

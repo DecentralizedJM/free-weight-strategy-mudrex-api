@@ -168,6 +168,26 @@ class TradeExecutor:
         else:
             return f"{quantity:.2f}"
     
+    def _format_price(self, price: float, symbol: str) -> str:
+        """Format price to match the asset's price_step precision."""
+        if self._client:
+            try:
+                asset = self._client.assets.get(symbol)
+                price_step = float(asset.price_step)
+                
+                if price_step > 0:
+                    # Round to price step
+                    price = round(price / price_step) * price_step
+                    
+                    # Format with appropriate precision
+                    precision = len(str(price_step).split('.')[-1]) if '.' in str(price_step) else 0
+                    return str(round(price, precision))
+            except Exception as e:
+                logger.warning(f"Could not get price step for {symbol}: {e}")
+        
+        # Fallback: use 4 decimal places
+        return str(round(price, 4))
+    
     def _dry_run_execute(self, signal: Signal) -> TradeResult:
         """Simulate trade execution without placing real orders."""
         # Use simulated balance
@@ -239,15 +259,23 @@ class TradeExecutor:
                     error=f"Position value ${position_value:.2f} below minimum ${min_order}"
                 )
             
-            # Format quantity
+            # Format quantity and prices to match asset specifications
             quantity_str = self._format_quantity(quantity, signal.symbol)
             
+            # Format SL/TP prices to asset's price_step
+            sl_price_str = self._format_price(signal.stoploss_price, signal.symbol) if signal.stoploss_price else None
+            tp_price_str = self._format_price(signal.takeprofit_price, signal.symbol) if signal.takeprofit_price else None
+            
             # Set leverage
-            self._client.leverage.set(
-                symbol=signal.symbol,
-                leverage=str(leverage),
-                margin_type="ISOLATED"
-            )
+            try:
+                self._client.leverage.set(
+                    symbol=signal.symbol,
+                    leverage=str(leverage),
+                    margin_type="ISOLATED"
+                )
+            except Exception as e:
+                logger.warning(f"⚠️ Skipping {signal.symbol}: leverage set failed ({e})")
+                return TradeResult(success=False, symbol=signal.symbol, error=f"Leverage error: {e}")
             
             # Place market order with SL/TP
             order = self._client.orders.create_market_order(
@@ -255,8 +283,8 @@ class TradeExecutor:
                 side=signal.side,
                 quantity=quantity_str,
                 leverage=str(leverage),
-                stoploss_price=str(round(signal.stoploss_price, 4)) if signal.stoploss_price else None,
-                takeprofit_price=str(round(signal.takeprofit_price, 4)) if signal.takeprofit_price else None,
+                stoploss_price=sl_price_str,
+                takeprofit_price=tp_price_str,
             )
             
             logger.info(
@@ -280,7 +308,7 @@ class TradeExecutor:
             )
             
         except Exception as e:
-            logger.error(f"Trade execution failed: {e}")
+            logger.warning(f"⚠️ Skipping {signal.symbol}: {e}")
             return TradeResult(
                 success=False,
                 symbol=signal.symbol,
