@@ -244,15 +244,7 @@ class TradingBot:
                     leverage=result.leverage,
                 )
         else:
-            logger.warning(f"⚠️ Trade skipped: {result.error}")
-            
-            # Send Telegram failure alert
-            if self.telegram:
-                await self.telegram.send_trade_failed(
-                    symbol=signal.symbol,
-                    side=signal.side,
-                    error=result.error or "Unknown error",
-                )
+            logger.debug(f"⏭️ {signal.symbol}: {result.error}")
 
 
 def parse_args() -> argparse.Namespace:

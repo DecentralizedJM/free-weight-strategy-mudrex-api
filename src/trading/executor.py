@@ -8,7 +8,8 @@ Includes auto-leverage scaling to meet minimum order value.
 
 import logging
 import math
-from typing import Optional, Tuple
+from decimal import Decimal, ROUND_DOWN, ROUND_HALF_UP
+from typing import Optional, Tuple, Dict
 from dataclasses import dataclass
 
 from src.config import Config
@@ -19,15 +20,15 @@ logger = logging.getLogger(__name__)
 
 @dataclass
 class TradeResult:
-    """Result of a trade execution."""
-    success: bool
+    """Result of a trade execution attempt."""
+    success: bool = False
     order_id: Optional[str] = None
-    symbol: str = ""
-    side: str = ""
-    quantity: str = ""
-    leverage: int = 1
-    margin_used: float = 0.0
-    position_value: float = 0.0
+    symbol: Optional[str] = None
+    side: Optional[str] = None
+    quantity: Optional[str] = None
+    leverage: Optional[int] = None
+    margin_used: Optional[float] = None
+    position_value: Optional[float] = None
     entry_price: Optional[float] = None
     stoploss_price: Optional[float] = None
     takeprofit_price: Optional[float] = None
@@ -36,13 +37,14 @@ class TradeResult:
 
 class TradeExecutor:
     """
-    Executes trades via Mudrex API.
+    Execute trades via Mudrex Futures API.
     
     Features:
     - Dry-run mode for testing
     - Rate limit awareness
     - Auto-leverage scaling to meet min order value
     - Margin percentage based position sizing
+    - Asset info caching for precision
     
     Example:
         executor = TradeExecutor(config)
@@ -55,6 +57,7 @@ class TradeExecutor:
         self.config = config
         self._client = None
         self._balance_cache: Optional[float] = None
+        self._asset_cache: Dict[str, dict] = {}  # Cache asset specs
         
         if not config.dry_run:
             self._init_client()
@@ -71,6 +74,29 @@ class TradeExecutor:
         except Exception as e:
             logger.error(f"Failed to initialize Mudrex client: {e}")
             raise
+    
+    def _get_asset_info(self, symbol: str) -> Optional[dict]:
+        """Get asset specifications with caching."""
+        if symbol in self._asset_cache:
+            return self._asset_cache[symbol]
+        
+        if not self._client:
+            return None
+        
+        try:
+            asset = self._client.assets.get(symbol)
+            info = {
+                "min_quantity": Decimal(str(asset.min_quantity)),
+                "quantity_step": Decimal(str(asset.quantity_step)),
+                "price_step": Decimal(str(asset.price_step)),
+                "min_leverage": int(getattr(asset, 'min_leverage', 1)),
+                "max_leverage": int(getattr(asset, 'max_leverage', 50)),
+            }
+            self._asset_cache[symbol] = info
+            return info
+        except Exception as e:
+            logger.debug(f"Could not fetch asset info for {symbol}: {e}")
+            return None
     
     def execute(self, signal: Signal) -> TradeResult:
         """
@@ -144,21 +170,20 @@ class TradeExecutor:
         return quantity, leverage, margin_amount, position_value
     
     def _format_quantity(self, quantity: float, symbol: str) -> str:
-        """Format quantity with appropriate precision."""
-        if self._client:
-            try:
-                asset = self._client.assets.get(symbol)
-                min_qty = float(asset.min_quantity)
-                qty_step = float(asset.quantity_step)
-                
-                # Round to quantity step
-                quantity = max(min_qty, round(quantity / qty_step) * qty_step)
-                
-                # Format with appropriate precision
-                precision = len(str(qty_step).split('.')[-1]) if '.' in str(qty_step) else 0
-                return str(round(quantity, precision))
-            except Exception as e:
-                logger.warning(f"Could not get asset info: {e}")
+        """Format quantity with appropriate precision using Decimal."""
+        asset_info = self._get_asset_info(symbol)
+        
+        if asset_info:
+            qty_step = asset_info["quantity_step"]
+            min_qty = asset_info["min_quantity"]
+            
+            # Use Decimal for precise rounding
+            qty = Decimal(str(quantity))
+            qty = (qty / qty_step).quantize(Decimal("1"), rounding=ROUND_DOWN) * qty_step
+            qty = max(min_qty, qty)
+            
+            # Format without trailing zeros but keep necessary precision
+            return f"{qty:f}".rstrip('0').rstrip('.')
         
         # Fallback formatting
         if "BTC" in symbol:
@@ -168,25 +193,26 @@ class TradeExecutor:
         else:
             return f"{quantity:.2f}"
     
-    def _format_price(self, price: float, symbol: str) -> str:
-        """Format price to match the asset's price_step precision."""
-        if self._client:
-            try:
-                asset = self._client.assets.get(symbol)
-                price_step = float(asset.price_step)
-                
-                if price_step > 0:
-                    # Round to price step
-                    price = round(price / price_step) * price_step
-                    
-                    # Format with appropriate precision
-                    precision = len(str(price_step).split('.')[-1]) if '.' in str(price_step) else 0
-                    return str(round(price, precision))
-            except Exception as e:
-                logger.warning(f"Could not get price step for {symbol}: {e}")
+    def _format_price(self, price: float, symbol: str) -> Optional[str]:
+        """Format price to match asset's price_step using Decimal."""
+        if price is None or price <= 0:
+            return None
         
-        # Fallback: use 4 decimal places
-        return str(round(price, 4))
+        asset_info = self._get_asset_info(symbol)
+        
+        if asset_info:
+            price_step = asset_info["price_step"]
+            
+            if price_step > 0:
+                # Use Decimal for precise rounding
+                p = Decimal(str(price))
+                p = (p / price_step).quantize(Decimal("1"), rounding=ROUND_HALF_UP) * price_step
+                
+                # Format without trailing zeros
+                return f"{p:f}".rstrip('0').rstrip('.')
+        
+        # Fallback
+        return str(round(price, 8))
     
     def _dry_run_execute(self, signal: Signal) -> TradeResult:
         """Simulate trade execution without placing real orders."""
@@ -222,7 +248,7 @@ class TradeExecutor:
         )
     
     def _live_execute(self, signal: Signal) -> TradeResult:
-        """Execute live trade via Mudrex API."""
+        """Execute live trade via Mudrex API with automatic retry."""
         if not self._client:
             return TradeResult(
                 success=False,
@@ -245,24 +271,26 @@ class TradeExecutor:
             
             # Guard: skip if quantity is zero (invalid entry price)
             if quantity <= 0:
+                logger.info(f"⏭️ {signal.symbol}: waiting for price data")
                 return TradeResult(
                     success=False,
                     symbol=signal.symbol,
-                    error=f"Invalid quantity for {signal.symbol} (entry_price={signal.entry_price})"
+                    error=f"Waiting for price data ({signal.symbol})"
                 )
             
             # Final validation
             min_order = self.config.risk.min_order_value
             if position_value < min_order:
+                logger.info(f"⏭️ {signal.symbol}: position ${position_value:.2f} below min ${min_order}")
                 return TradeResult(
                     success=False,
-                    error=f"Position value ${position_value:.2f} below minimum ${min_order}"
+                    error=f"Position too small (${position_value:.2f} < ${min_order})"
                 )
             
             # Format quantity and prices to match asset specifications
             quantity_str = self._format_quantity(quantity, signal.symbol)
             
-            # Format SL/TP prices to asset's price_step
+            # Format SL/TP prices
             sl_price_str = self._format_price(signal.stoploss_price, signal.symbol) if signal.stoploss_price else None
             tp_price_str = self._format_price(signal.takeprofit_price, signal.symbol) if signal.takeprofit_price else None
             
@@ -274,18 +302,48 @@ class TradeExecutor:
                     margin_type="ISOLATED"
                 )
             except Exception as e:
-                logger.warning(f"⚠️ Skipping {signal.symbol}: leverage set failed ({e})")
-                return TradeResult(success=False, symbol=signal.symbol, error=f"Leverage error: {e}")
+                logger.info(f"⏭️ {signal.symbol}: leverage not supported, skipping")
+                return TradeResult(success=False, symbol=signal.symbol, error=f"Leverage not supported")
             
-            # Place market order with SL/TP
-            order = self._client.orders.create_market_order(
-                symbol=signal.symbol,
-                side=signal.side,
-                quantity=quantity_str,
-                leverage=str(leverage),
-                stoploss_price=sl_price_str,
-                takeprofit_price=tp_price_str,
-            )
+            # Attempt 1: Place order with SL/TP
+            try:
+                order = self._client.orders.create_market_order(
+                    symbol=signal.symbol,
+                    side=signal.side,
+                    quantity=quantity_str,
+                    leverage=str(leverage),
+                    stoploss_price=sl_price_str,
+                    takeprofit_price=tp_price_str,
+                )
+            except Exception as e:
+                error_msg = str(e).lower()
+                
+                # If price step/params error, retry WITHOUT SL/TP
+                if "price" in error_msg or "param" in error_msg or "step" in error_msg:
+                    logger.info(f"🔄 {signal.symbol}: retrying without SL/TP")
+                    try:
+                        order = self._client.orders.create_market_order(
+                            symbol=signal.symbol,
+                            side=signal.side,
+                            quantity=quantity_str,
+                            leverage=str(leverage),
+                        )
+                    except Exception as retry_err:
+                        logger.info(f"⏭️ {signal.symbol}: order params incompatible, skipping")
+                        return TradeResult(
+                            success=False,
+                            symbol=signal.symbol,
+                            side=signal.side,
+                            error=f"Order params incompatible for {signal.symbol}"
+                        )
+                else:
+                    logger.info(f"⏭️ {signal.symbol}: order not accepted, skipping")
+                    return TradeResult(
+                        success=False,
+                        symbol=signal.symbol,
+                        side=signal.side,
+                        error=f"Order not accepted for {signal.symbol}"
+                    )
             
             logger.info(
                 f"✅ Order executed: {signal.side} {quantity_str} {signal.symbol} | "
@@ -308,7 +366,7 @@ class TradeExecutor:
             )
             
         except Exception as e:
-            logger.warning(f"⚠️ Skipping {signal.symbol}: {e}")
+            logger.info(f"⏭️ {signal.symbol}: skipped ({type(e).__name__})")
             return TradeResult(
                 success=False,
                 symbol=signal.symbol,
