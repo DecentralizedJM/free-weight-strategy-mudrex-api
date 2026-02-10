@@ -67,8 +67,12 @@ class Signal:
     
     @property
     def is_actionable(self) -> bool:
-        """Check if signal warrants action."""
-        return self.signal_type in (SignalType.LONG, SignalType.SHORT)
+        """Check if signal warrants action (valid direction + valid price)."""
+        return (
+            self.signal_type in (SignalType.LONG, SignalType.SHORT)
+            and self.entry_price is not None
+            and self.entry_price > 0
+        )
     
     @property
     def is_long(self) -> bool:

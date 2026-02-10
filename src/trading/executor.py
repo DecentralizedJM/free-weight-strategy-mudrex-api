@@ -136,6 +136,9 @@ class TradeExecutor:
                 )
         
         # Calculate quantity
+        if not signal.entry_price or signal.entry_price <= 0:
+            logger.warning(f"Invalid entry price {signal.entry_price} for {signal.symbol}, skipping")
+            return 0, leverage, margin_amount, position_value
         quantity = position_value / signal.entry_price
         
         return quantity, leverage, margin_amount, position_value
@@ -219,6 +222,14 @@ class TradeExecutor:
             quantity, leverage, margin_used, position_value = self._calculate_position(
                 signal, balance
             )
+            
+            # Guard: skip if quantity is zero (invalid entry price)
+            if quantity <= 0:
+                return TradeResult(
+                    success=False,
+                    symbol=signal.symbol,
+                    error=f"Invalid quantity for {signal.symbol} (entry_price={signal.entry_price})"
+                )
             
             # Final validation
             min_order = self.config.risk.min_order_value
