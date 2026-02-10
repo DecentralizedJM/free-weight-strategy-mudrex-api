@@ -95,9 +95,10 @@ class BybitWebSocket:
         self.ping_interval = ping_interval
         self.reconnect_delay = reconnect_delay
         
-        self._ws: Optional[websockets.WebSocketClientProtocol] = None
+        self._ws = None
         self._running = False
         self._reconnecting = False
+        self._connected = False
         
         # Data storage
         self.klines: Dict[str, List[OHLCV]] = {s: [] for s in self.symbols}
@@ -109,9 +110,25 @@ class BybitWebSocket:
         self.on_connect: Optional[Callable[[], None]] = None
         self.on_disconnect: Optional[Callable[[], None]] = None
     
+    def _is_connected(self) -> bool:
+        """Check if WebSocket is connected (version-agnostic)."""
+        if not self._ws or not self._connected:
+            return False
+        try:
+            # Try different attributes for different websockets versions
+            if hasattr(self._ws, 'open'):
+                return self._ws.open
+            if hasattr(self._ws, 'closed'):
+                return not self._ws.closed
+            # If neither exists, trust our flag
+            return self._connected
+        except Exception:
+            return self._connected
+    
     async def connect(self) -> None:
         """Connect to WebSocket and subscribe to streams."""
         logger.info(f"Connecting to Bybit WebSocket: {self.ws_url}")
+        self._connected = False
         
         try:
             self._ws = await websockets.connect(
@@ -119,6 +136,7 @@ class BybitWebSocket:
                 ping_interval=self.ping_interval,
                 ping_timeout=10,
             )
+            self._connected = True
             logger.info("WebSocket connected successfully")
             
             # Subscribe to streams
@@ -261,7 +279,7 @@ class BybitWebSocket:
         
         while self._running:
             try:
-                if not self._ws or not self._ws.open:
+                if not self._is_connected():
                     await self.connect()
                 
                 # Listen for messages
@@ -269,8 +287,12 @@ class BybitWebSocket:
                     if not self._running:
                         break
                     await self._handle_message(message)
+                
+                # If we exit the loop normally, connection was lost
+                self._connected = False
                     
             except ConnectionClosed as e:
+                self._connected = False
                 logger.warning(f"WebSocket connection closed: {e}")
                 if self.on_disconnect:
                     self.on_disconnect()
@@ -280,13 +302,15 @@ class BybitWebSocket:
                     await asyncio.sleep(self.reconnect_delay)
                     
             except Exception as e:
-                logger.error(f"WebSocket error: {e}")
+                self._connected = False
+                logger.warning(f"WebSocket reconnecting: {type(e).__name__}")
                 if self._running:
                     await asyncio.sleep(self.reconnect_delay)
     
     async def close(self) -> None:
         """Close the WebSocket connection."""
         self._running = False
+        self._connected = False
         if self._ws:
             await self._ws.close()
             logger.info("WebSocket connection closed")
