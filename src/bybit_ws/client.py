@@ -261,7 +261,7 @@ class BybitWebSocket:
         
         while self._running:
             try:
-                if not self._ws or self._ws.closed:
+                if not self._ws or not self._ws.open:
                     await self.connect()
                 
                 # Listen for messages
