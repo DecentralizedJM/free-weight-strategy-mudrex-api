@@ -248,21 +248,15 @@ class TradeExecutor:
         )
     
     def _live_execute(self, signal: Signal) -> TradeResult:
-        """Execute live trade via Mudrex API with automatic retry."""
+        """Execute live trade via Mudrex API."""
         if not self._client:
-            return TradeResult(
-                success=False,
-                error="Mudrex client not initialized"
-            )
+            return TradeResult(success=False, error="Mudrex client not initialized")
         
         try:
             # Get current balance
             balance = self.get_balance()
             if balance is None or balance <= 0:
-                return TradeResult(
-                    success=False,
-                    error="Could not get balance or balance is zero"
-                )
+                return TradeResult(success=False, error="No balance")
             
             # Calculate position with auto-leverage
             quantity, leverage, margin_used, position_value = self._calculate_position(
@@ -271,28 +265,32 @@ class TradeExecutor:
             
             # Guard: skip if quantity is zero (invalid entry price)
             if quantity <= 0:
-                logger.info(f"⏭️ {signal.symbol}: waiting for price data")
-                return TradeResult(
-                    success=False,
-                    symbol=signal.symbol,
-                    error=f"Waiting for price data ({signal.symbol})"
-                )
+                return TradeResult(success=False, symbol=signal.symbol)
             
-            # Final validation
-            min_order = self.config.risk.min_order_value
-            if position_value < min_order:
-                logger.info(f"⏭️ {signal.symbol}: position ${position_value:.2f} below min ${min_order}")
-                return TradeResult(
-                    success=False,
-                    error=f"Position too small (${position_value:.2f} < ${min_order})"
-                )
-            
-            # Format quantity and prices to match asset specifications
+            # Format quantity to match asset specifications
             quantity_str = self._format_quantity(quantity, signal.symbol)
             
-            # Format SL/TP prices
-            sl_price_str = self._format_price(signal.stoploss_price, signal.symbol) if signal.stoploss_price else None
-            tp_price_str = self._format_price(signal.takeprofit_price, signal.symbol) if signal.takeprofit_price else None
+            # Post-rounding validation: recalculate actual order value
+            actual_qty = float(quantity_str)
+            actual_order_value = actual_qty * (signal.entry_price or 0)
+            min_order = self.config.risk.min_order_value
+            
+            if actual_order_value < min_order:
+                logger.debug(f"⏭️ {signal.symbol}: order value ${actual_order_value:.2f} < min ${min_order}")
+                return TradeResult(success=False, symbol=signal.symbol)
+            
+            # Prepare SL/TP - only include if they meaningfully differ from entry
+            sl_price_str = None
+            tp_price_str = None
+            
+            if signal.entry_price and signal.entry_price > 0:
+                # SL must differ from entry by at least 0.1%
+                if signal.stoploss_price and abs(signal.stoploss_price - signal.entry_price) / signal.entry_price > 0.001:
+                    sl_price_str = self._format_price(signal.stoploss_price, signal.symbol)
+                
+                # TP must differ from entry by at least 0.1%
+                if signal.takeprofit_price and abs(signal.takeprofit_price - signal.entry_price) / signal.entry_price > 0.001:
+                    tp_price_str = self._format_price(signal.takeprofit_price, signal.symbol)
             
             # Set leverage
             try:
@@ -301,11 +299,10 @@ class TradeExecutor:
                     leverage=str(leverage),
                     margin_type="ISOLATED"
                 )
-            except Exception as e:
-                logger.info(f"⏭️ {signal.symbol}: leverage not supported, skipping")
-                return TradeResult(success=False, symbol=signal.symbol, error=f"Leverage not supported")
+            except Exception:
+                return TradeResult(success=False, symbol=signal.symbol)
             
-            # Attempt 1: Place order with SL/TP
+            # Place market order
             try:
                 order = self._client.orders.create_market_order(
                     symbol=signal.symbol,
@@ -315,12 +312,9 @@ class TradeExecutor:
                     stoploss_price=sl_price_str,
                     takeprofit_price=tp_price_str,
                 )
-            except Exception as e:
-                error_msg = str(e).lower()
-                
-                # If price step/params error, retry WITHOUT SL/TP
-                if "price" in error_msg or "param" in error_msg or "step" in error_msg:
-                    logger.info(f"🔄 {signal.symbol}: retrying without SL/TP")
+            except Exception:
+                # If SL/TP was included, try once more without
+                if sl_price_str or tp_price_str:
                     try:
                         order = self._client.orders.create_market_order(
                             symbol=signal.symbol,
@@ -328,22 +322,10 @@ class TradeExecutor:
                             quantity=quantity_str,
                             leverage=str(leverage),
                         )
-                    except Exception as retry_err:
-                        logger.info(f"⏭️ {signal.symbol}: order params incompatible, skipping")
-                        return TradeResult(
-                            success=False,
-                            symbol=signal.symbol,
-                            side=signal.side,
-                            error=f"Order params incompatible for {signal.symbol}"
-                        )
+                    except Exception:
+                        return TradeResult(success=False, symbol=signal.symbol, side=signal.side)
                 else:
-                    logger.info(f"⏭️ {signal.symbol}: order not accepted, skipping")
-                    return TradeResult(
-                        success=False,
-                        symbol=signal.symbol,
-                        side=signal.side,
-                        error=f"Order not accepted for {signal.symbol}"
-                    )
+                    return TradeResult(success=False, symbol=signal.symbol, side=signal.side)
             
             logger.info(
                 f"✅ Order executed: {signal.side} {quantity_str} {signal.symbol} | "
@@ -365,14 +347,8 @@ class TradeExecutor:
                 takeprofit_price=signal.takeprofit_price,
             )
             
-        except Exception as e:
-            logger.info(f"⏭️ {signal.symbol}: skipped ({type(e).__name__})")
-            return TradeResult(
-                success=False,
-                symbol=signal.symbol,
-                side=signal.side,
-                error=str(e)
-            )
+        except Exception:
+            return TradeResult(success=False, symbol=signal.symbol, side=signal.side)
     
     def get_balance(self) -> Optional[float]:
         """Get current futures balance."""
