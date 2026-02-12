@@ -67,12 +67,17 @@ class Signal:
     
     @property
     def is_actionable(self) -> bool:
-        """Check if signal warrants action (valid direction + valid price)."""
-        return (
-            self.signal_type in (SignalType.LONG, SignalType.SHORT)
-            and self.entry_price is not None
-            and self.entry_price > 0
-        )
+        """Check if signal warrants action (valid direction + valid prices)."""
+        if self.signal_type not in (SignalType.LONG, SignalType.SHORT):
+            return False
+        if not self.entry_price or self.entry_price <= 0:
+            return False
+        # SL and TP must meaningfully differ from entry (>0.1%)
+        if self.stoploss_price and abs(self.stoploss_price - self.entry_price) / self.entry_price < 0.001:
+            return False
+        if self.takeprofit_price and abs(self.takeprofit_price - self.entry_price) / self.entry_price < 0.001:
+            return False
+        return True
     
     @property
     def is_long(self) -> bool:

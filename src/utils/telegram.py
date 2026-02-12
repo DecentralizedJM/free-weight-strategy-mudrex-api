@@ -13,6 +13,8 @@ import aiohttp
 
 logger = logging.getLogger(__name__)
 
+STRATEGY_NAME = "Free Weight Strategy"
+
 
 @dataclass
 class TelegramConfig:
@@ -50,7 +52,6 @@ class TelegramAlerter:
     async def send_message(self, text: str, parse_mode: str = "HTML") -> bool:
         """Send a message to all configured Telegram chats."""
         if not self.bot_token or not self.chat_ids:
-            logger.debug("Telegram not configured, skipping alert")
             return False
         
         try:
@@ -77,10 +78,7 @@ class TelegramAlerter:
                 except Exception as e:
                     logger.error(f"Failed to send to chat {chat_id}: {e}")
             
-            if success_count > 0:
-                logger.debug(f"Telegram alert sent to {success_count}/{len(self.chat_ids)} chats")
-                return True
-            return False
+            return success_count > 0
                     
         except Exception as e:
             logger.error(f"Failed to send Telegram alert: {e}")
@@ -99,18 +97,17 @@ class TelegramAlerter:
         """Send a trade signal alert."""
         emoji = "🟢" if side == "LONG" else "🔴"
         
-        text = f"""
+        text = f"""\
 {emoji} <b>SIGNAL: {side} {symbol}</b>
+📋 <b>Strategy:</b> {STRATEGY_NAME}
 
 📊 <b>Confluence:</b> {confluence_score}%
 💰 <b>Entry:</b> ${entry_price:,.4f}
-🛑 <b>Stop-Loss:</b> ${stoploss_price:,.4f}
-🎯 <b>Take-Profit:</b> ${takeprofit_price:,.4f}
-
-{f"📝 {reason}" if reason else ""}
-""".strip()
+🛑 <b>SL:</b> ${stoploss_price:,.4f}
+🎯 <b>TP:</b> ${takeprofit_price:,.4f}
+{f"📝 {reason}" if reason else ""}"""
         
-        return await self.send_message(text)
+        return await self.send_message(text.strip())
     
     async def send_trade_executed(
         self,
@@ -126,14 +123,14 @@ class TelegramAlerter:
         order_id: str,
     ) -> bool:
         """Send a trade execution alert."""
-        emoji = "✅"
         side_emoji = "🟢" if side == "LONG" else "🔴"
         
-        text = f"""
-{emoji} <b>TRADE EXECUTED</b>
+        text = f"""\
+✅ <b>TRADE EXECUTED</b>
+📋 <b>Strategy:</b> {STRATEGY_NAME}
 
 {side_emoji} <b>{side} {symbol}</b>
-📦 <b>Quantity:</b> {quantity}
+📦 <b>Qty:</b> {quantity}
 ⚡ <b>Leverage:</b> {leverage}x
 💵 <b>Margin:</b> ${margin_used:.2f}
 📊 <b>Position:</b> ${position_value:.2f}
@@ -142,10 +139,9 @@ class TelegramAlerter:
 🛑 <b>SL:</b> ${stoploss_price:,.4f}
 🎯 <b>TP:</b> ${takeprofit_price:,.4f}
 
-🆔 <code>{order_id}</code>
-""".strip()
+🆔 <code>{order_id}</code>"""
         
-        return await self.send_message(text)
+        return await self.send_message(text.strip())
     
     async def send_trade_failed(
         self,
@@ -154,14 +150,14 @@ class TelegramAlerter:
         error: str,
     ) -> bool:
         """Send a trade failure alert."""
-        text = f"""
+        text = f"""\
 ❌ <b>TRADE FAILED</b>
+📋 <b>Strategy:</b> {STRATEGY_NAME}
 
 📉 <b>{side} {symbol}</b>
-⚠️ <b>Error:</b> {error}
-""".strip()
+⚠️ {error}"""
         
-        return await self.send_message(text)
+        return await self.send_message(text.strip())
     
     async def send_startup(
         self,
@@ -172,24 +168,22 @@ class TelegramAlerter:
         balance: Optional[float] = None,
     ) -> bool:
         """Send bot startup notification."""
-        # Show count instead of listing all symbols to avoid message length limit
         symbols_count = len(symbols)
         
-        text = f"""
-🚀 <b>Free Weight Strategy Started</b>
+        text = f"""\
+🚀 <b>{STRATEGY_NAME} Started</b>
 
 🔧 <b>Mode:</b> {mode}
 📊 <b>Symbols:</b> {symbols_count} pairs
 💰 <b>Margin:</b> {margin_pct}%
 ⚡ <b>Leverage:</b> {leverage_range}
-{f"💵 <b>Balance:</b> ${balance:.2f}" if balance else ""}
-""".strip()
+{f"💵 <b>Balance:</b> ${balance:.2f}" if balance else ""}"""
         
-        return await self.send_message(text)
+        return await self.send_message(text.strip())
     
     async def send_shutdown(self) -> bool:
         """Send bot shutdown notification."""
-        text = "⏹️ <b>Free Weight Strategy Stopped</b>"
+        text = f"⏹️ <b>{STRATEGY_NAME} Stopped</b>"
         return await self.send_message(text)
     
     async def close(self) -> None:

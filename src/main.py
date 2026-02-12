@@ -200,6 +200,7 @@ class TradingBot:
                 entry_price=signal.entry_price,
                 stoploss_price=signal.stoploss_price,
                 takeprofit_price=signal.takeprofit_price,
+                reason=signal.reason,
             )
         
         # Log indicator values for debugging
